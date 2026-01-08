@@ -134,7 +134,7 @@ def create_text2music_ui(
                 )
                 lora_weight = gr.Number(value=1.0, label="Lora weight", step=0.1, maximum=3, minimum=-3)
 
-            ref_audio_input = gr.Audio(type="filepath", label="Reference Audio (for Audio2Audio)", visible=False, elem_id="ref_audio_input", show_download_button=True)
+            ref_audio_input = gr.Audio(type="filepath", label="Reference Audio (for Audio2Audio)", visible=False, elem_id="ref_audio_input")
             ref_audio_strength = gr.Slider(
                 label="Refer audio strength",
                 minimum=0.0,
@@ -403,7 +403,6 @@ def create_text2music_ui(
                     type="filepath",
                     visible=False,
                     elem_id="repaint_source_audio_upload",
-                    show_download_button=True,
                 )
                 repaint_source.change(
                     fn=lambda x: gr.update(
@@ -572,7 +571,6 @@ def create_text2music_ui(
                     type="filepath",
                     visible=False,
                     elem_id="edit_source_audio_upload",
-                    show_download_button=True,
                 )
                 edit_source.change(
                     fn=lambda x: gr.update(
@@ -724,7 +722,6 @@ def create_text2music_ui(
                     type="filepath",
                     visible=False,
                     elem_id="extend_source_audio_upload",
-                    show_download_button=True,
                 )
                 extend_source.change(
                     fn=lambda x: gr.update(
@@ -848,47 +845,27 @@ def create_text2music_ui(
 
         def json2output(json_data):
             return (
-                json_data["audio_duration"],
-                json_data["prompt"],
-                json_data["lyrics"],
-                json_data["infer_step"],
-                json_data["guidance_scale"],
-                json_data["scheduler_type"],
-                json_data["cfg_type"],
-                json_data["omega_scale"],
-                ", ".join(map(str, json_data["actual_seeds"])),
-                json_data["guidance_interval"],
-                json_data["guidance_interval_decay"],
-                json_data["min_guidance_scale"],
-                json_data["use_erg_tag"],
-                json_data["use_erg_lyric"],
-                json_data["use_erg_diffusion"],
-                ", ".join(map(str, json_data["oss_steps"])),
-                (
-                    json_data["guidance_scale_text"]
-                    if "guidance_scale_text" in json_data
-                    else 0.0
-                ),
-                (
-                    json_data["guidance_scale_lyric"]
-                    if "guidance_scale_lyric" in json_data
-                    else 0.0
-                ),
-                (
-                    json_data["audio2audio_enable"]
-                    if "audio2audio_enable" in json_data
-                    else False
-                ),
-                (
-                    json_data["ref_audio_strength"]
-                    if "ref_audio_strength" in json_data
-                    else 0.5
-                ),
-                (
-                    json_data["ref_audio_input"]
-                    if "ref_audio_input" in json_data
-                    else None
-                ),
+                json_data.get("audio_duration", -1),
+                json_data.get("prompt", TAG_DEFAULT),
+                json_data.get("lyrics", LYRIC_DEFAULT),
+                json_data.get("infer_step", 60),
+                json_data.get("guidance_scale", 15.0),
+                json_data.get("scheduler_type", "euler"),
+                json_data.get("cfg_type", "apg"),
+                json_data.get("omega_scale", 10.0),
+                ", ".join(map(str, json_data.get("actual_seeds", []))),
+                json_data.get("guidance_interval", 0.5),
+                json_data.get("guidance_interval_decay", 0.0),
+                json_data.get("min_guidance_scale", 3.0),
+                json_data.get("use_erg_tag", True),
+                json_data.get("use_erg_lyric", False),
+                json_data.get("use_erg_diffusion", True),
+                ", ".join(map(str, json_data.get("oss_steps", []))),
+                json_data.get("guidance_scale_text", 0.0),
+                json_data.get("guidance_scale_lyric", 0.0),
+                json_data.get("audio2audio_enable", False),
+                json_data.get("ref_audio_strength", 0.5),
+                json_data.get("ref_audio_input", None),
             )
 
         def sample_data(lora_name_or_path_):
@@ -924,6 +901,9 @@ def create_text2music_ui(
         )
 
         def load_data(json_file):
+            if json_file is None or json_file == "":
+                gr.Warning("Please select a valid JSON file to load.")
+                return json2output({})  # Return empty/default values
             if isinstance(output_file_dir, str):
                 json_file = os.path.join(output_file_dir, json_file)
             json_data = load_data_func(json_file)

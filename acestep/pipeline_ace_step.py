@@ -156,7 +156,7 @@ class ACEStepPipeline:
 
     def get_checkpoint_path(self, checkpoint_dir, repo):
         checkpoint_dir_models = None
-        
+
         if checkpoint_dir is not None:
             required_dirs = ["music_dcae_f8c8", "music_vocoder", "ace_step_transformer", "umt5-base"]
             all_dirs_exist = True
@@ -165,18 +165,22 @@ class ACEStepPipeline:
                 if not os.path.exists(dir_path):
                     all_dirs_exist = False
                     break
-            
+
             if all_dirs_exist:
                 logger.info(f"Load models from: {checkpoint_dir}")
                 checkpoint_dir_models = checkpoint_dir
-        
+
         if checkpoint_dir_models is None:
-            if checkpoint_dir is None:
-                logger.info(f"Download models from Hugging Face: {repo}")
-                checkpoint_dir_models = snapshot_download(repo)
-            else:
-                logger.info(f"Download models from Hugging Face: {repo}, cache to: {checkpoint_dir}")
-                checkpoint_dir_models = snapshot_download(repo, cache_dir=checkpoint_dir)
+            try:
+                if checkpoint_dir is None:
+                    logger.info(f"Download models from Hugging Face: {repo}")
+                    checkpoint_dir_models = snapshot_download(repo)
+                else:
+                    logger.info(f"Download models from Hugging Face: {repo}, cache to: {checkpoint_dir}")
+                    checkpoint_dir_models = snapshot_download(repo, cache_dir=checkpoint_dir)
+            except Exception as e:
+                logger.error(f"Failed to download models from Hugging Face: {e}")
+                raise RuntimeError(f"Unable to download required models. Please check your internet connection and try again. Error: {e}")
         return checkpoint_dir_models
 
     def load_checkpoint(self, checkpoint_dir=None, export_quantized_weights=False):
@@ -1393,13 +1397,39 @@ class ACEStepPipeline:
                 output_path_wav = save_path
 
         target_wav = target_wav.float()
-        backend = "soundfile"
+
+        # Try different backends in order of preference
+        backends_to_try = []
         if format == "ogg":
-            backend = "sox"
-        logger.info(f"Saving audio to {output_path_wav} using backend {backend}")
-        torchaudio.save(
-            output_path_wav, target_wav, sample_rate=sample_rate, format=format, backend=backend
-        )
+            backends_to_try = ["sox", "soundfile"]
+        else:
+            backends_to_try = ["soundfile", "sox"]
+
+        saved_successfully = False
+        for backend in backends_to_try:
+            try:
+                logger.info(f"Saving audio to {output_path_wav} using backend {backend}")
+                torchaudio.save(
+                    output_path_wav, target_wav, sample_rate=sample_rate, format=format, backend=backend
+                )
+                saved_successfully = True
+                break
+            except Exception as e:
+                logger.warning(f"Failed to save with backend {backend}: {e}")
+                continue
+
+        if not saved_successfully:
+            # Fallback: try to save without specifying backend
+            try:
+                logger.info(f"Saving audio to {output_path_wav} without specifying backend")
+                torchaudio.save(
+                    output_path_wav, target_wav, sample_rate=sample_rate, format=format
+                )
+                saved_successfully = True
+            except Exception as e:
+                logger.error(f"Failed to save audio file: {e}")
+                raise RuntimeError(f"Unable to save audio file to {output_path_wav}. All backends failed.")
+
         return output_path_wav
 
     @cpu_offload("music_dcae")
@@ -1414,20 +1444,30 @@ class ACEStepPipeline:
 
     def load_lora(self, lora_name_or_path, lora_weight):
         if (lora_name_or_path != self.lora_path or lora_weight != self.lora_weight) and lora_name_or_path != "none":
-            if not os.path.exists(lora_name_or_path):
-                lora_download_path = snapshot_download(lora_name_or_path, cache_dir=self.checkpoint_dir)
-            else:
-                lora_download_path = lora_name_or_path
-            if self.lora_path != "none":
-                self.ace_step_transformer.unload_lora()
-            self.ace_step_transformer.load_lora_adapter(os.path.join(lora_download_path, "pytorch_lora_weights.safetensors"), adapter_name="ace_step_lora", with_alpha=True, prefix=None)
-            logger.info(f"Loading lora weights from: {lora_name_or_path} download path is: {lora_download_path} weight: {lora_weight}")
-            set_weights_and_activate_adapters(self.ace_step_transformer, ["ace_step_lora"], [lora_weight])
-            self.lora_path = lora_name_or_path
-            self.lora_weight = lora_weight
+            try:
+                if not os.path.exists(lora_name_or_path):
+                    logger.info(f"Downloading LoRA weights from Hugging Face: {lora_name_or_path}")
+                    lora_download_path = snapshot_download(lora_name_or_path, cache_dir=self.checkpoint_dir)
+                else:
+                    lora_download_path = lora_name_or_path
+                if self.lora_path != "none":
+                    self.ace_step_transformer.unload_lora()
+                self.ace_step_transformer.load_lora_adapter(os.path.join(lora_download_path, "pytorch_lora_weights.safetensors"), adapter_name="ace_step_lora", with_alpha=True, prefix=None)
+                logger.info(f"Loading lora weights from: {lora_name_or_path} download path is: {lora_download_path} weight: {lora_weight}")
+                set_weights_and_activate_adapters(self.ace_step_transformer, ["ace_step_lora"], [lora_weight])
+                self.lora_path = lora_name_or_path
+                self.lora_weight = lora_weight
+            except Exception as e:
+                logger.error(f"Failed to load LoRA weights from {lora_name_or_path}: {e}")
+                logger.warning("Continuing without LoRA weights. Please check your internet connection and try again.")
+                # Reset to none to avoid repeated attempts
+                self.lora_path = "none"
+                self.lora_weight = 1.0
         elif self.lora_path != "none" and lora_name_or_path == "none":
             logger.info("No lora weights to load.")
             self.ace_step_transformer.unload_lora()
+            self.lora_path = lora_name_or_path
+            self.lora_weight = lora_weight
 
     def __call__(
         self,
